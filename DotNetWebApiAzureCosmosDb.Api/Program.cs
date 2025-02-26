@@ -1,9 +1,23 @@
+using DotNetWebApiAzureCosmosDb.Api.Data;
+using DotNetWebApiAzureCosmosDb.Api.DTOs;
+using DotNetWebApiAzureCosmosDb.Api.Extensions;
+using DotNetWebApiAzureCosmosDb.Api.Models;
+
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+
+builder.Services.AddScoped<CosmosRepository>(_ =>
+    new CosmosRepository(
+        // connectionString: builder.Configuration.GetConnectionString("DockerConnection") ??
+        connectionString: builder.Configuration.GetConnectionString("AzureConnection") ??
+                          throw new Exception("Connection string not found"),
+        databaseName: "ProjectsDB"
+    )
+);
 
 var app = builder.Build();
 
@@ -16,29 +30,36 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 
-var summaries = new[]
+app.MapPost("/api/projects", async (InputProjectDto project, CosmosRepository repo) =>
 {
-    "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-};
+    var createdProject = await repo.AddAsync("Projects", project.ToModel());
+    return createdProject is null
+        ? Results.BadRequest("Failed to add project")
+        : Results.Created($"/api/projects/{createdProject.Id}", createdProject);
+});
 
-app.MapGet("/weatherforecast", () =>
-    {
-        var forecast = Enumerable.Range(1, 5).Select(index =>
-                new WeatherForecast
-                (
-                    DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-                    Random.Shared.Next(-20, 55),
-                    summaries[Random.Shared.Next(summaries.Length)]
-                ))
-            .ToArray();
-        return forecast;
-    })
-    .WithName("GetWeatherForecast")
-    .WithOpenApi();
+app.MapGet("/api/projects", async (CosmosRepository repo) =>
+{
+    var projects = await repo.GetAllAsync<Project>("Projects");
+    return Results.Ok(projects);
+});
+
+app.MapGet("/api/projects/{id:length(24)}", async (string id, CosmosRepository repo) =>
+{
+    var project = await repo.GetByIdAsync<Project>("Projects", id);
+    return project is not null ? Results.Ok(project) : Results.NotFound();
+});
+
+app.MapPut("/api/projects/{id:length(24)}", async (string id, InputProjectDto project, CosmosRepository repo) =>
+{
+    var updatedProject = await repo.UpdateAsync("Projects", id, project.ToModel(id: id));
+    return updatedProject is not null ? Results.Ok(updatedProject) : Results.NotFound();
+});
+
+app.MapDelete("/api/projects/{id:length(24)}", async (string id, CosmosRepository repo) =>
+{
+    var deleted = await repo.DeleteAsync<Project>("Projects", id);
+    return deleted ? Results.NoContent() : Results.NotFound();
+});
 
 app.Run();
-
-record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
-{
-    public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
-}
